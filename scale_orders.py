@@ -230,7 +230,10 @@ def print_scaled_orders(scaled_orders: list):
 
 
 def print_long_summary(scaled_orders: list, current_position_size: Decimal, current_entry_price: Decimal, ratio: Decimal):
-    """Print summary for long position if all buy orders are filled."""
+    """Print summary for long position if all buy orders are filled.
+
+    If current position is short, buy orders first close the short before opening long.
+    """
     buy_orders = [o for o in scaled_orders if o["side"].upper() == "B"]
 
     if not buy_orders:
@@ -240,27 +243,41 @@ def print_long_summary(scaled_orders: list, current_position_size: Decimal, curr
     total_buy_size = sum(o["scaled_size"] for o in buy_orders)
     total_buy_cost = sum(o["scaled_size"] * o["price"] for o in buy_orders)
 
-    # Current scaled position
-    scaled_current_size = abs(current_position_size) * ratio
-    scaled_current_cost = scaled_current_size * current_entry_price
+    # Current scaled position (positive = long, negative = short)
+    scaled_current_size = current_position_size * ratio
 
-    # Combined position if all orders filled
-    total_position = scaled_current_size + total_buy_size
-    total_cost = scaled_current_cost + total_buy_cost
-    avg_entry = total_cost / total_position if total_position > 0 else Decimal("0")
+    # Net position after all buy orders fill
+    # If long: adds to position
+    # If short: first closes short, then opens long
+    net_position = scaled_current_size + total_buy_size
 
     print("\n" + "=" * 70)
-    print("LONG POSITION SUMMARY (if all buy orders are filled)")
+    print("LONG SUMMARY (if all buy orders are filled)")
     print("=" * 70)
-    print(f"Current Scaled Position:     {scaled_current_size:>12.3f} BTC @ ${current_entry_price:,.2f}")
-    print(f"Additional from Orders:      {total_buy_size:>12.3f} BTC")
-    print(f"Total Potential Position:    {total_position:>12.3f} BTC")
-    print(f"Average Entry Price:         ${avg_entry:>14,.2f}")
-    print(f"Total Capital Required:      ${total_buy_cost:>14,.2f}")
+    print(f"Current Position:        {scaled_current_size:>12.3f} BTC")
+    print(f"Buy Orders Total:        {total_buy_size:>12.3f} BTC")
+    print(f"Net Position:            {net_position:>12.3f} BTC")
+
+    if net_position > 0:
+        # Calculate average entry for the long position
+        if scaled_current_size > 0:
+            # Was long, adding more long
+            current_cost = scaled_current_size * current_entry_price
+            avg_entry = (current_cost + total_buy_cost) / net_position
+        else:
+            # Was short or flat, now long from buys only
+            # Only the portion that creates the long matters
+            avg_entry = total_buy_cost / total_buy_size if total_buy_size > 0 else Decimal("0")
+        print(f"Average Entry Price:     ${avg_entry:>14,.2f}")
+
+    print(f"Capital Required:        ${total_buy_cost:>14,.2f}")
 
 
 def print_short_summary(scaled_orders: list, current_position_size: Decimal, current_entry_price: Decimal, ratio: Decimal):
-    """Print summary for short position if all sell orders are filled."""
+    """Print summary for short position if all sell orders are filled.
+
+    If current position is long, sell orders first close the long before opening short.
+    """
     sell_orders = [o for o in scaled_orders if o["side"].upper() == "A"]
 
     if not sell_orders:
@@ -270,23 +287,34 @@ def print_short_summary(scaled_orders: list, current_position_size: Decimal, cur
     total_sell_size = sum(o["scaled_size"] for o in sell_orders)
     total_sell_value = sum(o["scaled_size"] * o["price"] for o in sell_orders)
 
-    # Current scaled position (for shorts, size is negative but we track absolute)
-    scaled_current_size = abs(current_position_size) * ratio
-    scaled_current_value = scaled_current_size * current_entry_price
+    # Current scaled position (positive = long, negative = short)
+    scaled_current_size = current_position_size * ratio
 
-    # Combined position if all orders filled
-    total_position = scaled_current_size + total_sell_size
-    total_value = scaled_current_value + total_sell_value
-    avg_entry = total_value / total_position if total_position > 0 else Decimal("0")
+    # Net position after all sell orders fill
+    # If short: adds to short position
+    # If long: first closes long, then opens short
+    net_position = scaled_current_size - total_sell_size
 
     print("\n" + "=" * 70)
-    print("SHORT POSITION SUMMARY (if all sell orders are filled)")
+    print("SHORT SUMMARY (if all sell orders are filled)")
     print("=" * 70)
-    print(f"Current Scaled Position:     {scaled_current_size:>12.3f} BTC @ ${current_entry_price:,.2f}")
-    print(f"Additional from Orders:      {total_sell_size:>12.3f} BTC")
-    print(f"Total Potential Position:    {total_position:>12.3f} BTC")
-    print(f"Average Entry Price:         ${avg_entry:>14,.2f}")
-    print(f"Total Capital Required:      ${total_sell_value:>14,.2f}")
+    print(f"Current Position:        {scaled_current_size:>12.3f} BTC")
+    print(f"Sell Orders Total:       {total_sell_size:>12.3f} BTC")
+    print(f"Net Position:            {net_position:>12.3f} BTC")
+
+    if net_position < 0:
+        # Calculate average entry for the short position
+        if scaled_current_size < 0:
+            # Was short, adding more short
+            current_value = abs(scaled_current_size) * current_entry_price
+            avg_entry = (current_value + total_sell_value) / abs(net_position)
+        else:
+            # Was long or flat, now short from sells only
+            # Only the portion that creates the short matters
+            avg_entry = total_sell_value / total_sell_size if total_sell_size > 0 else Decimal("0")
+        print(f"Average Entry Price:     ${avg_entry:>14,.2f}")
+
+    print(f"Capital Required:        ${total_sell_value:>14,.2f}")
 
 
 def main():
