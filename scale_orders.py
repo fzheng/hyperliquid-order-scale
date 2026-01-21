@@ -25,17 +25,17 @@ def get_address() -> str:
 def get_user_position_choice() -> str:
     """Prompt user to select their BTC position direction."""
     print("\nSelect your BTC position:")
-    print("  a) Long")
-    print("  b) Short")
+    print("  0) Long")
+    print("  1) Short")
 
     while True:
-        choice = input("\nEnter your choice (a/b): ").strip().lower()
-        if choice == 'a':
+        choice = input("\nEnter your choice (0/1): ").strip()
+        if choice == '0':
             return 'long'
-        elif choice == 'b':
+        elif choice == '1':
             return 'short'
         else:
-            print("Invalid choice. Please enter 'a' for long or 'b' for short.")
+            print("Invalid choice. Please enter '0' for long or '1' for short.")
 
 
 def get_user_btc_size() -> Decimal:
