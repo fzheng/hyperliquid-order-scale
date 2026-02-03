@@ -1,4 +1,4 @@
-.PHONY: run test install clean
+.PHONY: run bot test install clean
 
 # Install dependencies
 install:
@@ -6,7 +6,11 @@ install:
 
 # Run the CLI tool
 run:
-	python scale_orders.py
+	python -m cli.main
+
+# Run the Telegram bot
+bot:
+	python -m bot.main
 
 # Run all tests
 test:
@@ -14,4 +18,4 @@ test:
 
 # Clean up cache files
 clean:
-	rm -rf __pycache__ .pytest_cache tests/__pycache__
+	rm -rf __pycache__ .pytest_cache tests/__pycache__ core/__pycache__ cli/__pycache__ bot/__pycache__
