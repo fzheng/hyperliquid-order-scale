@@ -4,6 +4,9 @@
 # Environment
 .env
 
+# User state
+user_state.json
+
 # Python
 __pycache__/
 *.py[cod]

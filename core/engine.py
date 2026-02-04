@@ -19,6 +19,30 @@ def get_address() -> str:
     return os.environ.get("HYPERLIQUID_ADDRESS", DEFAULT_ADDRESS)
 
 
+def fetch_btc_price() -> dict:
+    """Fetch BTC price from Hyperliquid.
+
+    Returns dict with keys: price, change_24h, change_pct_24h
+    """
+    payload = {"type": "metaAndAssetCtxs"}
+    response = requests.post(HYPERLIQUID_API_URL, json=payload, timeout=10)
+    response.raise_for_status()
+    data = response.json()
+
+    # BTC is the first asset in the list
+    btc_data = data[1][0]
+    price = Decimal(btc_data["midPx"])
+    price_24h_ago = Decimal(btc_data["prevDayPx"])
+    change_24h = price - price_24h_ago
+    change_pct = (change_24h / price_24h_ago * 100) if price_24h_ago else Decimal("0")
+
+    return {
+        "price": price,
+        "change_24h": change_24h,
+        "change_pct_24h": change_pct,
+    }
+
+
 def fetch_account_state(address: str) -> dict:
     """Fetch the account state from Hyperliquid API."""
     payload = {
@@ -223,6 +247,57 @@ def compute_short_summary(scaled_orders: list, current_position_size: Decimal, c
         "net_position": net_position,
         "avg_entry": avg_entry,
         "capital_required": total_sell_value,
+    }
+
+
+def get_weishen_position() -> dict:
+    """Get weishen's current BTC position and orders.
+
+    Returns dict with keys:
+        - error: str or None
+        - direction, size, entry_price, current_price, pnl
+        - last_activity, orders (raw BTC orders)
+    """
+    address = get_address()
+
+    try:
+        account_state = fetch_account_state(address)
+        orders = fetch_open_orders(address)
+        fills = fetch_user_fills(address)
+        price_data = fetch_btc_price()
+    except Exception as e:
+        return {"error": f"Failed to fetch data: {e}"}
+
+    btc_position = get_btc_position(account_state)
+    if not btc_position:
+        return {"error": "No BTC position found."}
+
+    direction = determine_position_direction(btc_position)
+    if not direction:
+        return {"error": "No active BTC position."}
+
+    size = Decimal(btc_position.get("szi", "0"))
+    entry_price = Decimal(btc_position.get("entryPx", "0"))
+    current_price = price_data["price"]
+
+    # P&L calculation: (current - entry) * size for long, (entry - current) * |size| for short
+    if size > 0:  # long
+        pnl = (current_price - entry_price) * size
+    else:  # short
+        pnl = (entry_price - current_price) * abs(size)
+
+    btc_orders = get_btc_orders(orders)
+    last_activity = get_last_activity_time(orders, fills)
+
+    return {
+        "error": None,
+        "direction": direction,
+        "size": abs(size),
+        "entry_price": entry_price,
+        "current_price": current_price,
+        "pnl": pnl,
+        "last_activity": last_activity,
+        "orders": btc_orders,
     }
 
 
