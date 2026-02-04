@@ -290,6 +290,8 @@ async def poll_and_notify(context: ContextTypes.DEFAULT_TYPE):
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /start and /menu commands."""
+    if not update.message:
+        return  # Ignore edited messages or other update types
     user_id = get_user_id(update)
     if user_id:
         register_user(user_id)
@@ -308,6 +310,8 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def price_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /price command."""
+    if not update.message:
+        return
     user_id = get_user_id(update)
     if user_id:
         register_user(user_id)
@@ -320,6 +324,8 @@ async def price_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def weishen_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /weishen command."""
+    if not update.message:
+        return
     user_id = get_user_id(update)
     if user_id:
         register_user(user_id)
@@ -329,6 +335,8 @@ async def weishen_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def me_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /me command."""
+    if not update.message:
+        return
     user_id = get_user_id(update)
     if not user_id:
         return  # Ignore channel posts or anonymous admins
@@ -362,6 +370,8 @@ async def me_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def set_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /set command to set user's position."""
+    if not update.message:
+        return
     user_id = get_user_id(update)
     if not user_id:
         return  # Ignore channel posts or anonymous admins
@@ -463,6 +473,8 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle user message with BTC size input (quick scale)."""
+    if not update.message or not update.message.text:
+        return
     user_id = get_user_id(update)
     if user_id:
         register_user(user_id)

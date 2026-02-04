@@ -3,7 +3,7 @@
 import pytest
 from decimal import Decimal
 
-from bot.main import detect_changes, format_changes
+from bot.main import detect_changes, format_changes, get_user_id, TELEGRAM_MAX_LENGTH
 
 
 def parse_input(text: str) -> tuple[str, Decimal]:
@@ -172,3 +172,131 @@ class TestFormatChanges:
         curr = {}
         result = format_changes(changes, curr)
         assert "Test change" in result
+
+    def test_truncates_long_messages(self):
+        """Test that messages exceeding Telegram limit are truncated."""
+        # Create many changes that would exceed the limit
+        changes = [f"Change {i}: Order modified at price ${90000 + i:,}" for i in range(200)]
+        curr = {"direction": "long", "size": Decimal("1"), "entry_price": Decimal("95000")}
+        result = format_changes(changes, curr)
+        assert len(result) <= TELEGRAM_MAX_LENGTH
+        assert "more changes" in result
+
+
+class TestDetectChangesEdgeCases:
+    """Additional edge case tests for detect_changes."""
+
+    def test_string_vs_number_sz_no_spurious_change(self):
+        """String "0.5" and number 0.5 should not trigger a change."""
+        prev = {
+            "direction": "long",
+            "size": "1",
+            "entry_price": "95000",
+            "orders": [{"oid": 123, "side": "B", "sz": "0.5", "limitPx": "90000"}]
+        }
+        curr = {
+            "direction": "long",
+            "size": Decimal("1"),
+            "entry_price": Decimal("95000"),
+            "orders": [{"oid": 123, "side": "B", "sz": 0.5, "limitPx": 90000}]  # numbers instead of strings
+        }
+        changes = detect_changes(prev, curr)
+        assert len(changes) == 0
+
+    def test_int_vs_string_oid_matched(self):
+        """Integer oid 123 and string "123" should match the same order."""
+        prev = {
+            "direction": "long",
+            "size": "1",
+            "entry_price": "95000",
+            "orders": [{"oid": 123, "side": "B", "sz": "0.5", "limitPx": "90000"}]  # int oid
+        }
+        curr = {
+            "direction": "long",
+            "size": Decimal("1"),
+            "entry_price": Decimal("95000"),
+            "orders": [{"oid": "123", "side": "B", "sz": "0.5", "limitPx": "90000"}]  # string oid
+        }
+        changes = detect_changes(prev, curr)
+        assert len(changes) == 0
+
+    def test_orders_with_none_oid_filtered(self):
+        """Orders with None oid should be filtered out."""
+        prev = {
+            "direction": "long",
+            "size": "1",
+            "entry_price": "95000",
+            "orders": [{"oid": None, "side": "B", "sz": "0.5", "limitPx": "90000"}]
+        }
+        curr = {
+            "direction": "long",
+            "size": Decimal("1"),
+            "entry_price": Decimal("95000"),
+            "orders": [{"oid": None, "side": "B", "sz": "0.6", "limitPx": "91000"}]
+        }
+        changes = detect_changes(prev, curr)
+        # Both orders have None oid, so they're filtered out - no changes detected
+        assert len(changes) == 0
+
+    def test_malformed_price_handled(self):
+        """Malformed limitPx should not crash the function."""
+        prev = {
+            "direction": "long",
+            "size": "1",
+            "entry_price": "95000",
+            "orders": [{"oid": 123, "side": "B", "sz": "0.5", "limitPx": "invalid"}]
+        }
+        curr = {
+            "direction": "long",
+            "size": Decimal("1"),
+            "entry_price": Decimal("95000"),
+            "orders": []
+        }
+        # Should not raise, should produce "Order removed" with fallback price display
+        changes = detect_changes(prev, curr)
+        assert len(changes) == 1
+        assert "Order removed" in changes[0]
+
+    def test_multiple_changes_detected(self):
+        """Multiple simultaneous changes are all detected."""
+        prev = {
+            "direction": "long",
+            "size": "1",
+            "entry_price": "95000",
+            "orders": [{"oid": 123, "side": "B", "sz": "0.5", "limitPx": "90000"}]
+        }
+        curr = {
+            "direction": "short",  # changed
+            "size": Decimal("2"),  # changed
+            "entry_price": Decimal("96000"),  # changed
+            "orders": [
+                {"oid": 123, "side": "B", "sz": "0.6", "limitPx": "91000"},  # modified
+                {"oid": 456, "side": "A", "sz": "0.3", "limitPx": "100000"}  # added
+            ]
+        }
+        changes = detect_changes(prev, curr)
+        # direction + size + entry + order modified + order added = 5 changes
+        assert len(changes) == 5
+
+
+class TestGetUserId:
+    """Tests for the get_user_id helper function."""
+
+    def test_returns_none_for_none_effective_user(self):
+        """Should return None when effective_user is None."""
+        class MockUpdate:
+            effective_user = None
+
+        result = get_user_id(MockUpdate())
+        assert result is None
+
+    def test_returns_id_when_effective_user_exists(self):
+        """Should return user ID when effective_user exists."""
+        class MockUser:
+            id = 12345
+
+        class MockUpdate:
+            effective_user = MockUser()
+
+        result = get_user_id(MockUpdate())
+        assert result == 12345
