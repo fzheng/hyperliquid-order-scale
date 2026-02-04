@@ -1,0 +1,13 @@
+# Auto-detect text files and normalize line endings
+* text=auto
+
+# Force LF for all text files
+*.py text eol=lf
+*.md text eol=lf
+*.txt text eol=lf
+*.json text eol=lf
+*.toml text eol=lf
+Makefile text eol=lf
+.gitignore text eol=lf
+.gitattributes text eol=lf
+.env.example text eol=lf
