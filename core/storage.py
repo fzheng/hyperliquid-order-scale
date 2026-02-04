@@ -1,15 +1,22 @@
 """User state storage with JSON file persistence."""
 
 import json
+import logging
 import os
 import tempfile
 import threading
 from decimal import Decimal
 from pathlib import Path
 
+logger = logging.getLogger(__name__)
+
 # Storage file path - uses DATA_DIR env var for Railway, falls back to local
 DATA_DIR = os.environ.get("DATA_DIR", ".")
 STORAGE_FILE = Path(DATA_DIR) / "user_state.json"
+
+# Log storage paths on module load
+logger.info(f"Storage DATA_DIR: {DATA_DIR}")
+logger.info(f"Users file: {Path(DATA_DIR) / 'registered_users.json'}")
 
 # Thread lock for safe concurrent access
 _storage_lock = threading.Lock()
@@ -123,14 +130,20 @@ def register_user(user_id: int | str):
     """Register a user for notifications."""
     with _users_lock:
         users = _load_users_unlocked()
-        users.add(int(user_id))
+        user_int = int(user_id)
+        is_new = user_int not in users
+        users.add(user_int)
         _save_users_unlocked(users)
+        if is_new:
+            logger.info(f"Registered new user {user_int}, total users: {len(users)}")
 
 
 def get_all_users() -> list[int]:
     """Get all registered user IDs."""
     with _users_lock:
-        return list(_load_users_unlocked())
+        users = list(_load_users_unlocked())
+        logger.debug(f"Loaded {len(users)} registered users from {USERS_FILE}")
+        return users
 
 
 # --- Previous state for change detection ---
