@@ -12,6 +12,7 @@ from decimal import Decimal, InvalidOperation
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
 
+from core import __version__
 from core.engine import fetch_btc_price, get_weishen_position, process_request, scale_orders
 from core.storage import (
     get_user_position, set_user_position, register_user, get_all_users,
@@ -580,6 +581,7 @@ def main():
     # Background job: poll every 10 minutes
     app.job_queue.run_repeating(poll_and_notify, interval=POLL_INTERVAL, first=10)
 
+    print(f"Hyperliquid BTC Order Scaler v{__version__}")
     print(f"Bot is running... Polling every {POLL_INTERVAL // 60} minutes.")
     print("Press Ctrl+C to stop.")
     app.run_polling()
