@@ -29,8 +29,20 @@ def fetch_btc_price() -> dict:
     response.raise_for_status()
     data = response.json()
 
-    # BTC is the first asset in the list
-    btc_data = data[1][0]
+    # Find BTC by symbol in metadata, then get matching context
+    meta = data[0]["universe"]
+    contexts = data[1]
+
+    btc_index = None
+    for i, asset in enumerate(meta):
+        if asset.get("name") == "BTC":
+            btc_index = i
+            break
+
+    if btc_index is None:
+        raise ValueError("BTC not found in Hyperliquid asset list")
+
+    btc_data = contexts[btc_index]
     price = Decimal(btc_data["midPx"])
     price_24h_ago = Decimal(btc_data["prevDayPx"])
     change_24h = price - price_24h_ago
@@ -112,11 +124,17 @@ def get_last_activity_time(orders: list, fills: list) -> str:
 
     for order in orders:
         if "timestamp" in order:
-            timestamps.append(order["timestamp"])
+            try:
+                timestamps.append(int(order["timestamp"]))
+            except (ValueError, TypeError):
+                pass
 
     for fill in fills:
         if "time" in fill:
-            timestamps.append(fill["time"])
+            try:
+                timestamps.append(int(fill["time"]))
+            except (ValueError, TypeError):
+                pass
 
     if not timestamps:
         return "Unknown"

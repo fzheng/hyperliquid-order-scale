@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Telegram bot interface for Hyperliquid BTC Order Scaling Tool."""
 
+import asyncio
 import os
 import logging
 from dotenv import load_dotenv
@@ -11,14 +12,27 @@ from decimal import Decimal, InvalidOperation
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
 
-from core.engine import fetch_btc_price, get_weishen_position, process_request, scale_orders, get_address
-from core.storage import get_user_position, set_user_position
+from core.engine import fetch_btc_price, get_weishen_position, process_request, scale_orders
+from core.storage import (
+    get_user_position, set_user_position, register_user, get_all_users,
+    get_previous_state, save_previous_state
+)
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=logging.INFO,
 )
 logger = logging.getLogger(__name__)
+
+# Polling interval in seconds (10 minutes)
+POLL_INTERVAL = 600
+
+
+def get_user_id(update: Update) -> int | None:
+    """Safely get user ID from update, returns None for channel posts or anonymous admins."""
+    if update.effective_user is None:
+        return None
+    return update.effective_user.id
 
 
 def get_main_menu_keyboard():
@@ -125,8 +139,160 @@ def format_my_position(user_pos: dict, weishen: dict, current_price: Decimal) ->
     return "\n".join(lines)
 
 
+# --- Change Detection ---
+
+def detect_changes(prev: dict | None, curr: dict) -> list[str]:
+    """Detect changes between previous and current state.
+
+    Returns list of change descriptions.
+    """
+    if prev is None:
+        return []  # First run, no changes to report
+
+    changes = []
+
+    # Position direction change
+    prev_dir = prev.get("direction") or "none"
+    curr_dir = curr.get("direction") or "none"
+    if prev_dir != curr_dir:
+        changes.append(f"🔄 Direction: {prev_dir.upper()} → {curr_dir.upper()}")
+
+    # Position size change
+    prev_size = Decimal(prev.get("size", "0"))
+    curr_size = Decimal(str(curr.get("size", 0)))
+    if prev_size != curr_size:
+        diff = curr_size - prev_size
+        sign = "+" if diff > 0 else ""
+        changes.append(f"📊 Size: {prev_size:.5f} → {curr_size:.5f} ({sign}{diff:.5f})")
+
+    # Entry price change
+    prev_entry = Decimal(prev.get("entry_price", "0"))
+    curr_entry = Decimal(str(curr.get("entry_price", 0)))
+    if prev_entry != curr_entry:
+        changes.append(f"💰 Entry: ${prev_entry:,.2f} → ${curr_entry:,.2f}")
+
+    # Order changes - normalize oid to string for consistent comparison
+    prev_orders = {str(o.get("oid")): o for o in prev.get("orders", []) if o.get("oid") is not None}
+    curr_orders = {str(o.get("oid")): o for o in curr.get("orders", []) if o.get("oid") is not None}
+
+    prev_oids = set(prev_orders.keys())
+    curr_oids = set(curr_orders.keys())
+
+    def safe_price(val) -> str:
+        """Safely format price, handling malformed data."""
+        try:
+            return f"${Decimal(str(val)):,.0f}"
+        except Exception:
+            return str(val)
+
+    def normalize_val(val) -> str:
+        """Normalize numeric values to string for comparison."""
+        try:
+            return str(Decimal(str(val)))
+        except Exception:
+            return str(val) if val is not None else ""
+
+    # New orders
+    added = curr_oids - prev_oids
+    for oid in added:
+        o = curr_orders[oid]
+        side = "BUY" if str(o.get("side", "")).upper() == "B" else "SELL"
+        changes.append(f"➕ Order added: {side} {o.get('sz')} @ {safe_price(o.get('limitPx', '0'))}")
+
+    # Removed orders
+    removed = prev_oids - curr_oids
+    for oid in removed:
+        o = prev_orders[oid]
+        side = "BUY" if str(o.get("side", "")).upper() == "B" else "SELL"
+        changes.append(f"➖ Order removed: {side} {o.get('sz')} @ {safe_price(o.get('limitPx', '0'))}")
+
+    # Modified orders - normalize values before comparison to handle string vs number differences
+    for oid in prev_oids & curr_oids:
+        p, c = prev_orders[oid], curr_orders[oid]
+        p_sz, c_sz = normalize_val(p.get("sz")), normalize_val(c.get("sz"))
+        p_px, c_px = normalize_val(p.get("limitPx")), normalize_val(c.get("limitPx"))
+        if p_sz != c_sz or p_px != c_px:
+            side = "BUY" if str(c.get("side", "")).upper() == "B" else "SELL"
+            changes.append(
+                f"✏️ Order modified: {side} {p.get('sz')} @ {safe_price(p.get('limitPx', '0'))} → "
+                f"{c.get('sz')} @ {safe_price(c.get('limitPx', '0'))}"
+            )
+
+    return changes
+
+
+TELEGRAM_MAX_LENGTH = 4096
+
+
+def format_changes(changes: list[str], curr: dict) -> str:
+    """Format change notification message, truncating if it exceeds Telegram's limit."""
+    header = "🔔 <b>Weishen Position Update</b>\n"
+    direction = (curr.get("direction") or "").upper()
+    size = curr.get("size", 0)
+    entry_price = curr.get("entry_price", 0)
+    footer = f"\n<b>Current:</b> {direction} {size:.5f} BTC @ ${entry_price:,.2f}"
+
+    # Reserve space for header, footer, and potential truncation message
+    truncation_msg = f"\n\n... and {{}} more changes"
+    reserved = len(header) + len(footer) + len(truncation_msg.format(999))
+
+    lines = []
+    total_len = reserved
+    truncated_count = 0
+
+    for change in changes:
+        change_len = len(change) + 1  # +1 for newline
+        if total_len + change_len <= TELEGRAM_MAX_LENGTH:
+            lines.append(change)
+            total_len += change_len
+        else:
+            truncated_count += 1
+
+    result = [header]
+    result.extend(lines)
+    if truncated_count > 0:
+        result.append(truncation_msg.format(truncated_count))
+    result.append(footer)
+
+    return "\n".join(result)
+
+
+async def poll_and_notify(context: ContextTypes.DEFAULT_TYPE):
+    """Background job: poll Hyperliquid and notify users of changes."""
+    try:
+        curr = await asyncio.to_thread(get_weishen_position)
+        if curr.get("error"):
+            logger.warning(f"Poll error: {curr['error']}")
+            return
+
+        prev = get_previous_state()
+        changes = detect_changes(prev, curr)
+
+        if changes:
+            msg = format_changes(changes, curr)
+            users = get_all_users()
+            logger.info(f"Detected {len(changes)} changes, notifying {len(users)} users")
+
+            for user_id in users:
+                try:
+                    await context.bot.send_message(chat_id=user_id, text=msg, parse_mode="HTML")
+                except Exception as e:
+                    logger.warning(f"Failed to notify user {user_id}: {e}")
+
+        # Save current state for next comparison
+        save_previous_state(curr)
+
+    except Exception as e:
+        logger.error(f"Poll error: {e}")
+
+
+# --- Command Handlers ---
+
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /start and /menu commands."""
+    user_id = get_user_id(update)
+    if user_id:
+        register_user(user_id)
     msg = (
         "<b>Hyperliquid BTC Order Scaler</b>\n\n"
         "Choose an option or use commands:\n"
@@ -134,15 +300,19 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• <code>/weishen</code> - His position\n"
         "• <code>/me</code> - Your position\n"
         "• <code>/set 0.05 92000</code> - Set your position\n"
-        "• Send a number to quick scale (e.g. <code>0.05</code> or <code>-0.05</code>)"
+        "• Send a number to quick scale (e.g. <code>0.05</code> or <code>-0.05</code>)\n\n"
+        "📢 You'll receive automatic updates when Weishen's position changes."
     )
     await update.message.reply_text(msg, parse_mode="HTML", reply_markup=get_main_menu_keyboard())
 
 
 async def price_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /price command."""
+    user_id = get_user_id(update)
+    if user_id:
+        register_user(user_id)
     try:
-        result = fetch_btc_price()
+        result = await asyncio.to_thread(fetch_btc_price)
         await update.message.reply_text(format_price(result), parse_mode="HTML")
     except Exception as e:
         await update.message.reply_text(f"Error fetching price: {e}")
@@ -150,13 +320,19 @@ async def price_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def weishen_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /weishen command."""
-    result = get_weishen_position()
+    user_id = get_user_id(update)
+    if user_id:
+        register_user(user_id)
+    result = await asyncio.to_thread(get_weishen_position)
     await update.message.reply_text(format_weishen(result), parse_mode="HTML")
 
 
 async def me_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /me command."""
-    user_id = update.effective_user.id
+    user_id = get_user_id(update)
+    if not user_id:
+        return  # Ignore channel posts or anonymous admins
+    register_user(user_id)
     user_pos = get_user_position(user_id)
 
     if not user_pos:
@@ -170,10 +346,14 @@ async def me_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Get current price and weishen's data
     try:
-        price_data = fetch_btc_price()
-        weishen = get_weishen_position()
+        price_data = await asyncio.to_thread(fetch_btc_price)
+        weishen = await asyncio.to_thread(get_weishen_position)
     except Exception as e:
         await update.message.reply_text(f"Error fetching data: {e}")
+        return
+
+    if weishen.get("error"):
+        await update.message.reply_text(f"Error fetching Weishen's data: {weishen['error']}")
         return
 
     response = format_my_position(user_pos, weishen, price_data["price"])
@@ -182,6 +362,10 @@ async def me_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def set_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /set command to set user's position."""
+    user_id = get_user_id(update)
+    if not user_id:
+        return  # Ignore channel posts or anonymous admins
+    register_user(user_id)
     if len(context.args) != 2:
         await update.message.reply_text(
             "Usage: <code>/set SIZE ENTRY</code>\n"
@@ -208,7 +392,6 @@ async def set_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Entry price must be positive.")
         return
 
-    user_id = update.effective_user.id
     set_user_position(user_id, size, entry)
 
     direction = "LONG" if size > 0 else "SHORT"
@@ -222,22 +405,26 @@ async def set_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle inline button callbacks."""
+    user_id = get_user_id(update)
+    if user_id:
+        register_user(user_id)
     query = update.callback_query
     await query.answer()
 
     if query.data == "price":
         try:
-            result = fetch_btc_price()
+            result = await asyncio.to_thread(fetch_btc_price)
             await query.message.reply_text(format_price(result), parse_mode="HTML")
         except Exception as e:
             await query.message.reply_text(f"Error fetching price: {e}")
 
     elif query.data == "weishen":
-        result = get_weishen_position()
+        result = await asyncio.to_thread(get_weishen_position)
         await query.message.reply_text(format_weishen(result), parse_mode="HTML")
 
     elif query.data == "me":
-        user_id = update.effective_user.id
+        if not user_id:
+            return  # Ignore if no user context
         user_pos = get_user_position(user_id)
 
         if not user_pos:
@@ -250,10 +437,14 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         try:
-            price_data = fetch_btc_price()
-            weishen = get_weishen_position()
+            price_data = await asyncio.to_thread(fetch_btc_price)
+            weishen = await asyncio.to_thread(get_weishen_position)
         except Exception as e:
             await query.message.reply_text(f"Error fetching data: {e}")
+            return
+
+        if weishen.get("error"):
+            await query.message.reply_text(f"Error fetching Weishen's data: {weishen['error']}")
             return
 
         response = format_my_position(user_pos, weishen, price_data["price"])
@@ -272,6 +463,9 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle user message with BTC size input (quick scale)."""
+    user_id = get_user_id(update)
+    if user_id:
+        register_user(user_id)
     text = update.message.text.strip()
 
     try:
@@ -292,7 +486,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         btc_size = abs(value)
 
     try:
-        result = process_request(direction, btc_size)
+        result = await asyncio.to_thread(process_request, direction, btc_size)
     except Exception as e:
         logger.error(f"API error: {e}")
         await update.message.reply_text(f"Error fetching data: {e}")
@@ -371,7 +565,11 @@ def main():
     # Text messages (for quick scale with numbers)
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-    print("Bot is running... Press Ctrl+C to stop.")
+    # Background job: poll every 10 minutes
+    app.job_queue.run_repeating(poll_and_notify, interval=POLL_INTERVAL, first=10)
+
+    print(f"Bot is running... Polling every {POLL_INTERVAL // 60} minutes.")
+    print("Press Ctrl+C to stop.")
     app.run_polling()
 
 

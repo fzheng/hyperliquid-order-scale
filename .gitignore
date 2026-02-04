@@ -6,6 +6,8 @@
 
 # User state
 user_state.json
+registered_users.json
+prev_state.json
 
 # Python
 __pycache__/
