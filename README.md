@@ -1,63 +1,117 @@
 # Hyperliquid BTC Order Scaling Tool
 
-A CLI tool that retrieves BTC position and pending orders from a Hyperliquid account, then scales the orders proportionally based on your BTC position size.
+A tool that tracks a Hyperliquid account's BTC position and pending orders, then scales them proportionally based on your position size. Available as both a Telegram bot and CLI.
 
 ## Features
 
-- Fetches real-time BTC position data from Hyperliquid
-- Retrieves all pending BTC orders
-- Validates position direction (long/short) matches
-- Scales orders proportionally based on your position size
-- Displays scaled orders sorted by price
-- Shows position summary with average entry price and capital required
+- **Telegram Bot** with automatic position change notifications
+- Real-time BTC price tracking
+- Position monitoring (direction, size, entry price, P&L)
+- Proportional order scaling based on your position size
+- User position storage with comparison to tracked account
+- Background polling with change detection
+
+## Telegram Bot
+
+### Setup
+
+1. Create a bot with [@BotFather](https://t.me/BotFather) and get your token
+2. Set environment variables:
+
+```bash
+TELEGRAM_BOT_TOKEN=your_bot_token_here
+HYPERLIQUID_ADDRESS=0x...  # Optional, defaults to weishen's address
+```
+
+3. Run the bot:
+
+```bash
+make bot
+```
+
+### Commands
+
+| Command | Description |
+|---------|-------------|
+| `/start`, `/menu` | Show main menu with options |
+| `/price` | Get current BTC price |
+| `/weishen` | View tracked account's position and orders |
+| `/me` | View your position with scaled orders |
+| `/set SIZE ENTRY` | Set your position (e.g., `/set 0.05 92000`) |
+
+### Quick Scale
+
+Send a number directly to get scaled orders:
+- `0.05` - Scale for long 0.05 BTC
+- `-0.05` - Scale for short 0.05 BTC
+
+### Notifications
+
+The bot automatically polls the tracked account every 10 minutes and sends notifications when:
+- Position direction changes
+- Position size changes
+- Entry price changes
+- Orders are added, removed, or modified
+
+## CLI
+
+```bash
+make run
+# or
+python -m cli.main
+```
+
+The CLI prompts for:
+1. Position direction (long/short)
+2. Your BTC position size
 
 ## Installation
 
 ```bash
 pip install -r requirements.txt
-```
-
-Or using make:
-
-```bash
+# or
 make install
 ```
 
-## Usage
-
-```bash
-make run
-```
-
-Or directly:
-
-```bash
-python scale_orders.py
-```
-
-The tool will prompt you for:
-1. Your position direction (long or short)
-2. Your BTC position size
-
 ## Configuration
 
-Set a custom Hyperliquid address via environment variable:
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `TELEGRAM_BOT_TOKEN` | Telegram bot token | Required for bot |
+| `HYPERLIQUID_ADDRESS` | Account address to track | weishen's address |
+| `DATA_DIR` | Directory for data files | `.` (current dir) |
 
-```bash
-# Windows
-set HYPERLIQUID_ADDRESS=0x... && python scale_orders.py
+## Project Structure
 
-# Linux/Mac
-HYPERLIQUID_ADDRESS=0x... python scale_orders.py
 ```
-
-Default address: `0xdae4df7207feb3b350e4284c8efe5f7dac37f637`
+hyperliquid-order-scale/
+├── bot/
+│   └── main.py          # Telegram bot
+├── cli/
+│   └── main.py          # CLI interface
+├── core/
+│   ├── engine.py        # Shared business logic
+│   └── storage.py       # User state persistence
+├── tests/
+│   ├── test_engine.py   # Core logic tests
+│   └── test_bot.py      # Bot tests
+├── requirements.txt
+└── Makefile
+```
 
 ## Running Tests
 
 ```bash
 make test
 ```
+
+## Deployment (Railway)
+
+1. Set environment variables in Railway dashboard:
+   - `TELEGRAM_BOT_TOKEN`
+   - `DATA_DIR=/data` (for persistent storage)
+
+2. Deploy - the bot starts automatically via `make bot`
 
 ## License
 
