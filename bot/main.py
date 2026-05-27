@@ -323,6 +323,9 @@ async def price_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         result = await asyncio.to_thread(fetch_btc_price)
         await update.message.reply_text(format_price(result), parse_mode="HTML")
     except Exception as e:
+        # Error messages are sent as plain text (no parse_mode="HTML") so
+        # exception payloads cannot accidentally introduce HTML/markup. Keep
+        # this convention across all error replies in this file.
         await update.message.reply_text(f"Error fetching price: {e}")
 
 
