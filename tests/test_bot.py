@@ -3,7 +3,10 @@
 import pytest
 from decimal import Decimal
 
-from bot.main import detect_changes, format_changes, get_user_id, TELEGRAM_MAX_LENGTH
+from bot.main import (
+    detect_changes, format_changes, get_user_id, TELEGRAM_MAX_LENGTH,
+    format_price, format_weishen, format_my_position, format_scale_result,
+)
 
 
 def parse_input(text: str) -> tuple[str, Decimal]:
@@ -344,3 +347,110 @@ class TestExceptionNarrowingHelpers:
         # After Task 2 fix, these helpers should NOT use `except Exception` or `except:`.
         assert "except Exception" not in src, \
             "safe_price/normalize_val should use a narrow exception tuple"
+
+
+class TestFormatPrice:
+    def test_positive_change(self):
+        msg = format_price({
+            "price": Decimal("92500"),
+            "change_24h": Decimal("500"),
+            "change_pct_24h": Decimal("0.54"),
+        })
+        assert "$92,500.00" in msg
+        assert "+0.54%" in msg
+        assert "+$500.00" in msg
+
+    def test_negative_change(self):
+        msg = format_price({
+            "price": Decimal("91500"),
+            "change_24h": Decimal("-500"),
+            "change_pct_24h": Decimal("-0.54"),
+        })
+        assert "-0.54%" in msg
+        assert "$-500.00" in msg
+
+
+class TestFormatWeishen:
+    def test_error_passthrough(self):
+        assert format_weishen({"error": "boom"}) == "Error: boom"
+
+    def test_long_position_with_orders(self):
+        result = {
+            "error": None, "direction": "long", "size": Decimal("0.5"),
+            "entry_price": Decimal("90000"), "current_price": Decimal("92000"),
+            "pnl": Decimal("1000"), "last_activity": "5 minutes ago",
+            "orders": [{"side": "B", "sz": "0.05", "limitPx": "89000"}],
+        }
+        msg = format_weishen(result)
+        assert "LONG 0.50000 BTC" in msg
+        assert "BUY" in msg
+        assert "+$1,000.00" in msg
+
+    def test_no_orders_section_when_empty(self):
+        result = {
+            "error": None, "direction": "long", "size": Decimal("0.5"),
+            "entry_price": Decimal("90000"), "current_price": Decimal("90000"),
+            "pnl": Decimal("0"), "last_activity": "just now", "orders": [],
+        }
+        msg = format_weishen(result)
+        assert "Orders" not in msg
+
+
+class TestFormatMyPosition:
+    def test_matching_direction_scales(self):
+        user_pos = {"size": Decimal("0.05"), "entry_price": Decimal("92000")}
+        weishen = {
+            "direction": "long", "size": Decimal("0.5"),
+            "orders": [{"side": "B", "sz": "0.10", "limitPx": "89000"}],
+        }
+        msg = format_my_position(user_pos, weishen, Decimal("93000"))
+        assert "LONG 0.05000 BTC" in msg
+        assert "Scaled Orders" in msg
+        # ratio = 0.05/0.5 = 0.1; scaled = 0.10 * 0.1 = 0.010
+        assert "0.010" in msg
+
+    def test_direction_mismatch_warns(self):
+        user_pos = {"size": Decimal("0.05"), "entry_price": Decimal("92000")}
+        weishen = {"direction": "short", "size": Decimal("0.5"), "orders": []}
+        msg = format_my_position(user_pos, weishen, Decimal("93000"))
+        assert "mismatch" in msg.lower()
+
+    def test_short_position_pnl(self):
+        user_pos = {"size": Decimal("-0.05"), "entry_price": Decimal("95000")}
+        weishen = {"direction": "short", "size": Decimal("0.5"), "orders": []}
+        msg = format_my_position(user_pos, weishen, Decimal("90000"))
+        # (95000-90000) * 0.05 = 250
+        assert "+$250.00" in msg
+
+
+class TestFormatScaleResult:
+    def test_renders_orders_table_and_summary(self):
+        result = {
+            "last_activity": "1 hour ago",
+            "account_direction": "long",
+            "account_btc_size": Decimal("1.0"),
+            "entry_price": Decimal("90000"),
+            "user_direction": "long",
+            "user_btc_size": Decimal("0.1"),
+            "ratio": Decimal("0.1"),
+            "num_orders": 1,
+            "scaled_orders": [
+                {"side": "B", "price": Decimal("89000"),
+                 "scaled_size": Decimal("0.010"),
+                 "original_size": Decimal("0.10"),
+                 "notional": Decimal("890")},
+            ],
+            "long_summary": {
+                "current_size": Decimal("0.1"),
+                "order_total": Decimal("0.010"),
+                "net_position": Decimal("0.110"),
+                "avg_entry": Decimal("89909"),
+                "capital_required": Decimal("890"),
+            },
+            "short_summary": None,
+        }
+        msg = format_scale_result(result)
+        assert "BUY" in msg
+        assert "LONG SUMMARY" in msg
+        assert "SHORT SUMMARY" not in msg
+        assert "ratio: 0.1000" in msg
