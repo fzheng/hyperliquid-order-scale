@@ -21,8 +21,15 @@ security/coverage spec. Reviewer: agent following
    server-defined enum. No injection surface.
 
 2. **Output sanitization.** Error replies in `bot/main.py` interpolate `{e}` and
-   `{result['error']}` at 9 sites. All use default plain-text rendering, so
-   exception payloads cannot inject HTML/markup. Convention documented inline.
+   `{result['error']}` at 9 sites. 8 of 9 are direct `reply_text(...)` calls
+   using default plain-text rendering — exception payloads cannot inject
+   HTML/markup. The remaining site is indirect: `format_weishen` (line 65)
+   returns `f"Error: {result['error']}"` which is then sent via
+   `reply_text(..., parse_mode="HTML")` at lines 340 and 440. This is currently
+   safe because `result['error']` is built from the bot's own f-strings
+   (no HTML chars), but a future change that surfaces raw API error text
+   through this path would need `html.escape` on the interpolation.
+   Convention for the 8 direct sites is documented inline.
 
 3. **Concurrency and storage.** `core/storage.py` uses `threading.Lock` per file
    plus `_atomic_write` (tempfile + `os.replace`). `os.replace` is atomic on Linux
@@ -60,8 +67,11 @@ security/coverage spec. Reviewer: agent following
 - If multiprocessing is ever added (or the bot runs behind multiple replicas on
   Railway), the `threading.Lock` will not coordinate across processes —
   storage will need a different scheme (single-writer or file lock).
-- If error messages ever switch to `parse_mode="HTML"`, every interpolation
-  site will need `html.escape` on the exception payload.
+- If `format_weishen`'s error-return path ever surfaces raw API exception
+  text (rather than the bot's own constructed strings), the interpolation
+  into HTML-mode rendering at lines 340/440 needs `html.escape`. The 8
+  direct error-reply sites would only need attention if they ever switch
+  to `parse_mode="HTML"`.
 
 ## CI/CD
 
