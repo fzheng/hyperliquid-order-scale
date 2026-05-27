@@ -1,0 +1,12 @@
+[tool.coverage.run]
+source = ["core", "bot"]
+omit = ["cli/*", "tests/*", "**/__init__.py"]
+branch = true
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = false
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

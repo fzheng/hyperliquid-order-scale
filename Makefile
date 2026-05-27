@@ -1,4 +1,4 @@
-.PHONY: run bot test install clean
+.PHONY: run bot test install clean audit coverage
 
 # Install dependencies
 install:
@@ -15,6 +15,14 @@ bot:
 # Run all tests
 test:
 	python -m pytest tests/ -v
+
+# Run dependency vulnerability audit
+audit:
+	pip-audit -r requirements.txt --strict
+
+# Run tests with coverage report
+coverage:
+	pytest tests/ --cov --cov-report=term-missing
 
 # Clean up cache files
 clean:
