@@ -2,7 +2,8 @@
 
 import pytest
 from decimal import Decimal
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
+from datetime import datetime
 
 import os
 import sys
@@ -17,6 +18,12 @@ from core.engine import (
     scale_orders,
     compute_long_summary,
     compute_short_summary,
+    fetch_btc_price,
+    fetch_account_state,
+    fetch_open_orders,
+    fetch_user_fills,
+    get_relative_time,
+    get_last_activity_time,
 )
 
 
@@ -219,3 +226,120 @@ class TestComputeShortSummary:
         """Should return None if no sell orders."""
         scaled_orders = [{"side": "B", "scaled_size": Decimal("0.1"), "price": Decimal("80000")}]
         assert compute_short_summary(scaled_orders, Decimal("0.05"), Decimal("90000"), Decimal("1")) is None
+
+
+def _mock_response(json_data, raise_for_status=None):
+    """Build a fake requests.Response for patching."""
+    resp = MagicMock()
+    resp.json.return_value = json_data
+    if raise_for_status is not None:
+        resp.raise_for_status.side_effect = raise_for_status
+    return resp
+
+
+class TestFetchBtcPrice:
+    def test_parses_btc_price_correctly(self):
+        meta = {"universe": [{"name": "ETH"}, {"name": "BTC"}]}
+        contexts = [
+            {"midPx": "3500", "prevDayPx": "3400"},
+            {"midPx": "92000", "prevDayPx": "90000"},
+        ]
+        with patch("core.engine.requests.post", return_value=_mock_response([meta, contexts])):
+            result = fetch_btc_price()
+        assert result["price"] == Decimal("92000")
+        assert result["change_24h"] == Decimal("2000")
+        assert result["change_pct_24h"].quantize(Decimal("0.01")) == Decimal("2.22")
+
+    def test_raises_when_btc_not_in_universe(self):
+        meta = {"universe": [{"name": "ETH"}]}
+        contexts = [{"midPx": "3500", "prevDayPx": "3400"}]
+        with patch("core.engine.requests.post", return_value=_mock_response([meta, contexts])):
+            with pytest.raises(ValueError, match="BTC not found"):
+                fetch_btc_price()
+
+    def test_zero_prev_day_handled(self):
+        """Should not divide by zero when prevDayPx is 0."""
+        meta = {"universe": [{"name": "BTC"}]}
+        contexts = [{"midPx": "100", "prevDayPx": "0"}]
+        with patch("core.engine.requests.post", return_value=_mock_response([meta, contexts])):
+            result = fetch_btc_price()
+        assert result["change_pct_24h"] == Decimal("0")
+
+
+class TestFetchAccountState:
+    def test_posts_correct_payload(self):
+        with patch("core.engine.requests.post", return_value=_mock_response({"x": 1})) as mock:
+            result = fetch_account_state("0xabc")
+        assert result == {"x": 1}
+        args, kwargs = mock.call_args
+        assert kwargs["json"] == {"type": "clearinghouseState", "user": "0xabc"}
+
+
+class TestFetchOpenOrders:
+    def test_posts_correct_payload(self):
+        with patch("core.engine.requests.post", return_value=_mock_response([])) as mock:
+            result = fetch_open_orders("0xabc")
+        assert result == []
+        _, kwargs = mock.call_args
+        assert kwargs["json"] == {"type": "openOrders", "user": "0xabc"}
+
+
+class TestFetchUserFills:
+    def test_returns_empty_list_on_network_error(self):
+        import requests as req
+        with patch("core.engine.requests.post",
+                   side_effect=req.exceptions.ConnectionError("boom")):
+            result = fetch_user_fills("0xabc")
+        assert result == []
+
+    def test_returns_data_on_success(self):
+        with patch("core.engine.requests.post",
+                   return_value=_mock_response([{"time": 123}])):
+            result = fetch_user_fills("0xabc")
+        assert result == [{"time": 123}]
+
+
+class TestGetRelativeTime:
+    @pytest.fixture
+    def now_ms(self):
+        return int(datetime.now().timestamp() * 1000)
+
+    def test_just_now(self, now_ms):
+        assert get_relative_time(now_ms) == "just now"
+
+    def test_minutes_ago(self, now_ms):
+        five_min_ago = now_ms - 5 * 60 * 1000
+        assert get_relative_time(five_min_ago) == "5 minutes ago"
+
+    def test_one_hour_ago_singular(self, now_ms):
+        one_hr_ago = now_ms - 60 * 60 * 1000
+        assert get_relative_time(one_hr_ago) == "1 hour ago"
+
+    def test_days_ago(self, now_ms):
+        two_days_ago = now_ms - 2 * 86400 * 1000
+        assert get_relative_time(two_days_ago) == "2 days ago"
+
+    def test_weeks_ago(self, now_ms):
+        two_weeks_ago = now_ms - 2 * 604800 * 1000
+        assert get_relative_time(two_weeks_ago) == "2 weeks ago"
+
+    def test_months_ago(self, now_ms):
+        three_months_ago = now_ms - 3 * 2592000 * 1000
+        assert get_relative_time(three_months_ago) == "3 months ago"
+
+
+class TestGetLastActivityTime:
+    def test_unknown_when_no_data(self):
+        assert get_last_activity_time([], []) == "Unknown"
+
+    def test_uses_most_recent_timestamp(self):
+        now_ms = int(datetime.now().timestamp() * 1000)
+        orders = [{"timestamp": now_ms - 1000}]
+        fills = [{"time": now_ms - 60000}]
+        # Most recent is the order at ~1s ago — should report "just now"
+        assert get_last_activity_time(orders, fills) == "just now"
+
+    def test_skips_malformed_timestamps(self):
+        now_ms = int(datetime.now().timestamp() * 1000)
+        orders = [{"timestamp": "garbage"}, {"timestamp": now_ms}]
+        assert get_last_activity_time(orders, []) == "just now"
