@@ -186,14 +186,14 @@ def detect_changes(prev: dict | None, curr: dict) -> list[str]:
         """Safely format price, handling malformed data."""
         try:
             return f"${Decimal(str(val)):,.0f}"
-        except Exception:
+        except (ValueError, TypeError, InvalidOperation):
             return str(val)
 
     def normalize_val(val) -> str:
         """Normalize numeric values to string for comparison."""
         try:
             return str(Decimal(str(val)))
-        except Exception:
+        except (ValueError, TypeError, InvalidOperation):
             return str(val) if val is not None else ""
 
     # New orders

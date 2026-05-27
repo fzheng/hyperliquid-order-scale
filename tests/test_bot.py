@@ -300,3 +300,47 @@ class TestGetUserId:
 
         result = get_user_id(MockUpdate())
         assert result == 12345
+
+
+from decimal import InvalidOperation
+
+
+class TestExceptionNarrowingHelpers:
+    """detect_changes uses two nested helpers — exercise both branches of each."""
+
+    def test_malformed_price_falls_back_to_str(self):
+        """Detection should not crash on malformed price strings — exercises the except branch."""
+        prev = {
+            "direction": "long", "size": "0.5", "entry_price": "90000",
+            "orders": [{"oid": "1", "side": "B", "sz": "0.05", "limitPx": "not-a-number"}],
+        }
+        curr = {
+            "direction": "long", "size": "0.5", "entry_price": "90000", "orders": [],
+        }
+        # Should not raise; the removed-order line falls back to str() formatting.
+        changes = detect_changes(prev, curr)
+        assert any("not-a-number" in c for c in changes)
+
+    def test_normalize_handles_none(self):
+        """When sz/limitPx is None on one side, comparison must not crash."""
+        prev = {
+            "direction": "long", "size": "0.5", "entry_price": "90000",
+            "orders": [{"oid": "1", "side": "B", "sz": None, "limitPx": "90000"}],
+        }
+        curr = {
+            "direction": "long", "size": "0.5", "entry_price": "90000",
+            "orders": [{"oid": "1", "side": "B", "sz": "0.05", "limitPx": "90000"}],
+        }
+        changes = detect_changes(prev, curr)
+        assert any("modified" in c.lower() for c in changes)
+
+    def test_keyboardinterrupt_propagates(self):
+        """After narrowing, KeyboardInterrupt should propagate (not be swallowed)."""
+        # We can't easily inject KeyboardInterrupt into the inner Decimal() call,
+        # but we can document the property: the helpers must NOT catch BaseException.
+        # This test asserts the source code uses a narrow exception tuple.
+        import inspect
+        src = inspect.getsource(detect_changes)
+        # After Task 2 fix, these helpers should NOT use `except Exception` or `except:`.
+        assert "except Exception" not in src, \
+            "safe_price/normalize_val should use a narrow exception tuple"
