@@ -11,11 +11,10 @@ def storage_module(tmp_path, monkeypatch):
     """Reload core.storage with DATA_DIR pointed at a tmp_path.
 
     Returns the freshly-reloaded module so tests get isolated JSON files.
+    Each test's setup reload supersedes any prior state — no teardown
+    reload is needed.
     """
     monkeypatch.setenv("DATA_DIR", str(tmp_path))
     import core.storage as storage
     importlib.reload(storage)
-    yield storage
-    # Reset to a fresh import after the test so subsequent tests don't
-    # see the tmp_path that no longer exists.
-    importlib.reload(storage)
+    return storage

@@ -28,9 +28,10 @@ class TestUserPosition:
 
     def test_string_user_id_works(self, storage_module):
         storage_module.set_user_position("42", Decimal("0.05"), Decimal("92000"))
-        assert storage_module.get_user_position(42) is not None  # int and str equivalent
+        pos = storage_module.get_user_position(42)
+        assert pos == {"size": Decimal("0.05"), "entry_price": Decimal("92000")}
 
-    def test_corrupted_json_returns_none(self, storage_module, tmp_path):
+    def test_corrupted_json_returns_none(self, storage_module):
         # Write garbage to the storage file, confirm graceful handling
         storage_module.STORAGE_FILE.write_text("{not valid json")
         assert storage_module.get_user_position(42) is None
@@ -87,6 +88,10 @@ class TestPreviousState:
         storage_module.save_previous_state(state)
         loaded = storage_module.get_previous_state()
         assert "internalField" not in loaded["orders"][0]
+
+    def test_corrupted_prev_state_returns_none(self, storage_module):
+        storage_module.PREV_STATE_FILE.write_text("{bad json")
+        assert storage_module.get_previous_state() is None
 
 
 class TestAtomicWrite:
