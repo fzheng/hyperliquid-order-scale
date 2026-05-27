@@ -343,3 +343,118 @@ class TestGetLastActivityTime:
         now_ms = int(datetime.now().timestamp() * 1000)
         orders = [{"timestamp": "garbage"}, {"timestamp": now_ms}]
         assert get_last_activity_time(orders, []) == "just now"
+
+
+from core.engine import get_weishen_position, process_request
+
+
+def _fake_position(direction="long", size="0.5", entry="90000"):
+    """Build a fake account_state with a single BTC position."""
+    signed = size if direction == "long" else f"-{size}"
+    return {
+        "assetPositions": [
+            {"position": {"coin": "BTC", "szi": signed, "entryPx": entry}},
+        ]
+    }
+
+
+class TestGetWeishenPosition:
+    def test_happy_path_long(self, monkeypatch):
+        monkeypatch.setattr("core.engine.fetch_account_state",
+                           lambda addr: _fake_position("long", "0.5", "90000"))
+        monkeypatch.setattr("core.engine.fetch_open_orders",
+                           lambda addr: [{"coin": "BTC", "side": "B", "sz": "0.05", "limitPx": "89000"}])
+        monkeypatch.setattr("core.engine.fetch_user_fills", lambda addr: [])
+        monkeypatch.setattr("core.engine.fetch_btc_price",
+                           lambda: {"price": Decimal("95000"),
+                                    "change_24h": Decimal("5000"),
+                                    "change_pct_24h": Decimal("5.5")})
+        result = get_weishen_position()
+        assert result["error"] is None
+        assert result["direction"] == "long"
+        assert result["size"] == Decimal("0.5")
+        assert result["pnl"] == Decimal("2500")  # (95000-90000)*0.5
+
+    def test_short_pnl(self, monkeypatch):
+        monkeypatch.setattr("core.engine.fetch_account_state",
+                           lambda addr: _fake_position("short", "0.5", "95000"))
+        monkeypatch.setattr("core.engine.fetch_open_orders", lambda addr: [])
+        monkeypatch.setattr("core.engine.fetch_user_fills", lambda addr: [])
+        monkeypatch.setattr("core.engine.fetch_btc_price",
+                           lambda: {"price": Decimal("90000"),
+                                    "change_24h": Decimal("0"),
+                                    "change_pct_24h": Decimal("0")})
+        result = get_weishen_position()
+        assert result["direction"] == "short"
+        assert result["pnl"] == Decimal("2500")  # (95000-90000)*0.5
+
+    def test_no_position_returns_error(self, monkeypatch):
+        monkeypatch.setattr("core.engine.fetch_account_state",
+                           lambda addr: {"assetPositions": []})
+        monkeypatch.setattr("core.engine.fetch_open_orders", lambda addr: [])
+        monkeypatch.setattr("core.engine.fetch_user_fills", lambda addr: [])
+        monkeypatch.setattr("core.engine.fetch_btc_price",
+                           lambda: {"price": Decimal("90000"),
+                                    "change_24h": Decimal("0"),
+                                    "change_pct_24h": Decimal("0")})
+        result = get_weishen_position()
+        assert "No BTC position" in result["error"]
+
+    def test_zero_size_position_returns_error(self, monkeypatch):
+        monkeypatch.setattr("core.engine.fetch_account_state",
+                           lambda addr: {"assetPositions": [
+                               {"position": {"coin": "BTC", "szi": "0", "entryPx": "90000"}}]})
+        monkeypatch.setattr("core.engine.fetch_open_orders", lambda addr: [])
+        monkeypatch.setattr("core.engine.fetch_user_fills", lambda addr: [])
+        monkeypatch.setattr("core.engine.fetch_btc_price",
+                           lambda: {"price": Decimal("90000"),
+                                    "change_24h": Decimal("0"),
+                                    "change_pct_24h": Decimal("0")})
+        result = get_weishen_position()
+        assert "No active BTC position" in result["error"]
+
+    def test_api_failure_returns_error(self, monkeypatch):
+        monkeypatch.setattr("core.engine.fetch_account_state",
+                           lambda addr: (_ for _ in ()).throw(RuntimeError("network")))
+        result = get_weishen_position()
+        assert "Failed to fetch" in result["error"]
+
+
+class TestProcessRequest:
+    def test_happy_path_scales_orders(self, monkeypatch):
+        monkeypatch.setattr("core.engine.fetch_account_state",
+                           lambda addr: _fake_position("long", "1.0", "90000"))
+        monkeypatch.setattr("core.engine.fetch_open_orders",
+                           lambda addr: [
+                               {"coin": "BTC", "side": "B", "sz": "0.10", "limitPx": "89000", "timestamp": 123},
+                           ])
+        monkeypatch.setattr("core.engine.fetch_user_fills", lambda addr: [])
+        result = process_request("long", Decimal("0.5"))
+        assert result["error"] is None
+        assert result["ratio"] == Decimal("0.5")
+        assert result["num_orders"] == 1
+        assert result["scaled_orders"][0]["scaled_size"] == Decimal("0.050")
+
+    def test_direction_mismatch_returns_error(self, monkeypatch):
+        monkeypatch.setattr("core.engine.fetch_account_state",
+                           lambda addr: _fake_position("long", "1.0", "90000"))
+        monkeypatch.setattr("core.engine.fetch_open_orders", lambda addr: [])
+        monkeypatch.setattr("core.engine.fetch_user_fills", lambda addr: [])
+        result = process_request("short", Decimal("0.5"))
+        assert "Direction mismatch" in result["error"]
+
+    def test_no_orders_returns_error(self, monkeypatch):
+        monkeypatch.setattr("core.engine.fetch_account_state",
+                           lambda addr: _fake_position("long", "1.0", "90000"))
+        monkeypatch.setattr("core.engine.fetch_open_orders", lambda addr: [])
+        monkeypatch.setattr("core.engine.fetch_user_fills", lambda addr: [])
+        result = process_request("long", Decimal("0.5"))
+        assert "No pending BTC orders" in result["error"]
+
+    def test_no_position_returns_error(self, monkeypatch):
+        monkeypatch.setattr("core.engine.fetch_account_state",
+                           lambda addr: {"assetPositions": []})
+        monkeypatch.setattr("core.engine.fetch_open_orders", lambda addr: [])
+        monkeypatch.setattr("core.engine.fetch_user_fills", lambda addr: [])
+        result = process_request("long", Decimal("0.5"))
+        assert "No BTC position" in result["error"]
