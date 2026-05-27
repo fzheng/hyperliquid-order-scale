@@ -1,5 +1,6 @@
 # Claude
-.claude/
+.claude/*
+!.claude/skills/
 
 # Environment
 .env
@@ -16,6 +17,8 @@ __pycache__/
 *.so
 .Python
 .pytest_cache/
+.coverage
+htmlcov/
 *.egg-info/
 dist/
 build/
