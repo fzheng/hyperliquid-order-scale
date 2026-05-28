@@ -102,7 +102,9 @@ hyperliquid-order-scale/
 ## Running Tests
 
 ```bash
-make test
+make test         # all tests
+make coverage     # tests + coverage report (gate: 85% on core/ + bot/)
+make audit        # pip-audit on requirements.txt
 ```
 
 ## Deployment (Railway)

@@ -22,7 +22,7 @@ audit:
 
 # Run tests with coverage report
 coverage:
-	pytest tests/ --cov --cov-report=term-missing
+	pytest tests/ --cov --cov-report=term-missing --cov-fail-under=85
 
 # Clean up cache files
 clean:
